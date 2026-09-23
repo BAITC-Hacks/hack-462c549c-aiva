@@ -4,4 +4,4 @@ pandas>=2,<3
 pydantic>=2,<3
 python-dotenv>=1,<2
 pytest>=8,<9
-openai>=1,<2
+openai>=3,<4
