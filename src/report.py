@@ -3,6 +3,54 @@ import pandas as pd
 from .models import ComparisonRow, ParsedDocument
 
 
+def review_key(row: ComparisonRow) -> str:
+    source = row.before or row.after
+    return source.fragment_id if source else row.status
+
+
+def review_priority(row: ComparisonRow) -> dict:
+    status = row.semantic_status or row.status
+    if row.result_type == "RISK_FLAG" or status in {"потенциально потеряна", "потенциально перераспределена", "потенциальное дублирование", "потенциальный конфликт полномочий"}:
+        return {"priority": "Проверить в первую очередь", "reason": "RISK_FLAG или потенциальное изменение ответственности."}
+    if row.requires_human_review or status == "функция существенно изменена":
+        return {"priority": "Требует проверки", "reason": "Неоднозначное или существенно изменённое сопоставление."}
+    return {"priority": "Информационно", "reason": "Результат не содержит признаков обязательной экспертной проверки."}
+
+
+def expert_conclusion(rows: list[ComparisonRow], review_state: dict) -> list[dict]:
+    result = []
+    for row in rows:
+        state = review_state.get(review_key(row), {})
+        if state.get("decision") == "Подтверждено":
+            result.append({"status": "Подтверждено экспертом", "text": row.explanation, "source": review_key(row)})
+        elif state.get("decision") == "Отклонено":
+            result.append({"status": "Отклонено экспертом", "text": "AI-находка отклонена и не считается подтверждённой.", "source": review_key(row)})
+        elif row.requires_human_review or row.result_type == "RISK_FLAG":
+            result.append({"status": "Ожидает экспертной проверки", "text": row.explanation, "source": review_key(row)})
+    return result
+
+
+def build_recommendations(rows: list[ComparisonRow]) -> list[dict]:
+    recommendations = []
+    for row in rows:
+        source = row.before or row.after
+        if not source:
+            continue
+        if row.semantic_status in {"потенциально перераспределена", "потенциально потеряна"}:
+            recommendations.append({"priority": "требует проверки", "observation": row.semantic_status,
+                "action": "Проверить распределение и закрепление функции.", "source": source.fragment_id,
+                "confidence": row.confidence})
+        elif row.requires_human_review and (row.before and row.after and row.before.clause_id and row.before.clause_id.startswith("3.")):
+            recommendations.append({"priority": "требует проверки", "observation": "Изменение структуры или ответственности",
+                "action": "Проверить корректность закрепления ответственности за подразделением.", "source": source.fragment_id,
+                "confidence": row.confidence})
+        elif row.semantic_status in {"потенциальное дублирование", "потенциальный конфликт полномочий"}:
+            recommendations.append({"priority": "требует проверки", "observation": row.semantic_status,
+                "action": "Проверить отсутствие пересечения полномочий.", "source": source.fragment_id,
+                "confidence": row.confidence})
+    return recommendations
+
+
 def rows_to_dataframe(rows: list[ComparisonRow]) -> pd.DataFrame:
     data = []
     for row in rows:

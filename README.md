@@ -47,6 +47,14 @@ flowchart LR
 
 Python, Streamlit, pypdf, pandas, Pydantic, OpenAI Python SDK, python-dotenv, pytest.
 
+## 7.1 Поддерживаемые форматы входных документов
+
+- PDF — извлечение с page/clause traceability;
+- DOCX — paragraph/table/clause traceability;
+- XLSX — sheet/row/cell traceability.
+
+Формат `.xls` не поддерживается текущим parser-слоем: используйте `.xlsx`. Независимо от формата документ приводится к единой внутренней модели фрагментов, после чего используется общий analyzer.
+
 ## 8. Структура проекта
 
 ```text

@@ -9,10 +9,11 @@ EvidenceType = Literal["FACT", "INFERENCE", "RISK_FLAG"]
 class Fragment(BaseModel):
     fragment_id: str
     document_name: str
-    page_number: int
+    page_number: int | None = None
     clause_id: str | None = None
     raw_text: str
     cleaned_text: str
+    source_locator: str | None = None
 
 
 class FunctionRecord(BaseModel):
