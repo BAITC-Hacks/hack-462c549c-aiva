@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from src.analyzer import compare_documents, structural_changes
 from src.parser import parse_pdf
 from src.report import conclusion
+from src.semantic import ai_status, check_ai_connection, duplicate_flags, enhance_rows, model_name
+from src.models import FunctionRecord
 
 load_dotenv()
 st.set_page_config(page_title="AI-анализ документов", layout="wide")
@@ -16,6 +18,10 @@ st.caption("MVP: сравнение нормативных PDF с доказат
 
 before_file = st.file_uploader("Документ ДО", type=["pdf"], key="before")
 after_file = st.file_uploader("Документ ПОСЛЕ", type=["pdf"], key="after")
+status = ai_status()
+st.caption(f"AI status: {status['status']} | model: {status['model']}")
+if status.get("error"):
+    st.warning(f"Fallback reason: {status['error']['category']} ({status['error']['exception']}) — {status['error']['message']}")
 
 
 def save_upload(uploaded):
@@ -31,17 +37,32 @@ if st.button("Провести анализ", type="primary", disabled=not (befo
         progress.write("✓ Документы загружены")
         before = parse_pdf(save_upload(before_file))
         after = parse_pdf(save_upload(after_file))
-        progress.write("✓ Структура извлечена")
-        progress.write("✓ Подразделения и функции определены")
+        def smoke_record(document, clause_id="5.3.1"):
+            fragment = document.clauses.get(clause_id) or next(iter(document.clauses.values()))
+            return FunctionRecord(function_id=fragment.fragment_id, text=fragment.cleaned_text, fragment_id=fragment.fragment_id, clause_id=fragment.clause_id)
+        smoke = check_ai_connection(smoke_record(before), smoke_record(after))
+        if smoke["status"] == "Connected":
+            st.success(f"AI status: Connected | model: {smoke['model']} | smoke result: {smoke['result']['semantic_status']}")
+        elif smoke.get("error"):
+            st.warning(f"AI status: API error / fallback | model: {smoke['model']} | {smoke['error']['category']}: {smoke['error']['message']}")
+        else:
+            st.info(f"AI status: {smoke['status']} | model: {smoke['model']}")
+        progress.write("✓ Извлечение документов")
+        progress.write("✓ Разбор структуры")
+        progress.write("✓ Извлечение функций")
         rows = compare_documents(before, after)
-        progress.write("✓ Выполнено сопоставление и классификация")
+        progress.write("✓ Поиск кандидатов")
+        rows, candidate_count = enhance_rows(before, after, rows, use_ai=True)
+        progress.write(f"✓ Semantic AI matching (кандидатов: {candidate_count})")
         structure = structural_changes(before, after)
-        progress.write("✓ Выполнена проверка рисков")
+        progress.write("✓ Проверка потери функций")
+        duplicates = duplicate_flags(after)
+        progress.write("✓ Проверка дублирования")
         fragments = {f.fragment_id: f for f in before.fragments + after.fragments}
         assert all((not r.before or r.before.fragment_id in fragments) and (not r.after or r.after.fragment_id in fragments) for r in rows)
-        progress.write("✓ Источники проверены")
+        progress.write("✓ Traceability validation")
         ai_available = bool(os.getenv("OPENAI_API_KEY"))
-        text = conclusion(before, after, rows, ai_available)
+        text = conclusion(before, after, rows, ai_available, structure, duplicates)
         progress.write("✓ Заключение сформировано")
         progress.update(label="Анализ завершён", state="complete")
 
@@ -58,20 +79,35 @@ if st.button("Провести анализ", type="primary", disabled=not (befo
             "Пункт ПОСЛЕ": r.after.clause_id if r.after else "",
             "Страница ПОСЛЕ": fragments[r.after.fragment_id].page_number if r.after else "",
             "Фрагмент ПОСЛЕ": r.after.text if r.after else "",
-            "Статус": r.status, "Тип": r.evidence_type,
-            "Объяснение": r.explanation, "Confidence": r.confidence,
+            "Статус": r.status, "Semantic status": r.semantic_status or "",
+            "Result type": r.result_type or r.evidence_type, "AI explanation": r.explanation,
+            "Confidence": r.confidence, "Requires human review": r.requires_human_review,
+            "Analysis method": r.analysis_method,
         } for r in rows])
         st.dataframe(table, use_container_width=True, height=600)
         st.subheader("Потенциальные риски")
-        risks = [r for r in rows if r.evidence_type == "RISK_FLAG"]
+        risks = [r for r in rows if r.evidence_type == "RISK_FLAG" and r.status != "Изменена"] + duplicates
         if risks:
             for risk in risks:
                 with st.expander(f"{risk.status}: {risk.before.clause_id if risk.before else risk.after.clause_id}"):
                     st.warning(risk.explanation)
                     st.write("ДО:", risk.before.text if risk.before else "нет")
                     st.write("ПОСЛЕ:", risk.after.text if risk.after else "нет")
+                    st.write("Метод:", risk.analysis_method, "Confidence:", risk.confidence)
         else:
             st.info("Автоматических risk flags по номерным пунктам не найдено.")
+        st.subheader("Требуют проверки человеком")
+        review_rows = [r for r in rows if r.requires_human_review]
+        if review_rows:
+            st.dataframe(pd.DataFrame([{
+                "Semantic status": r.semantic_status or r.status,
+                "Confidence": r.confidence,
+                "Пункт ДО": r.before.clause_id if r.before else "",
+                "Пункт ПОСЛЕ": r.after.clause_id if r.after else "",
+                "Explanation": r.explanation,
+            } for r in review_rows]), use_container_width=True)
+        else:
+            st.info("Результатов, требующих проверки человеком, не найдено.")
         st.subheader("Итоговое заключение")
         st.markdown(text)
         if not ai_available:

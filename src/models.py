@@ -30,6 +30,10 @@ class ComparisonRow(BaseModel):
     evidence_type: EvidenceType
     explanation: str
     confidence: float | None = Field(default=None, ge=0, le=1)
+    semantic_status: str | None = None
+    requires_human_review: bool = False
+    analysis_method: Literal["AI", "deterministic"] = "deterministic"
+    result_type: EvidenceType | None = None
 
 
 class ParsedDocument(BaseModel):
