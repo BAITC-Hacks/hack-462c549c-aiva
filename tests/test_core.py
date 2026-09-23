@@ -6,7 +6,7 @@ from src.parser import parse_pdf
 from src.document_parser import parse_document, parse_docx, parse_xlsx
 from src.semantic import enhance_rows, validate_result
 import src.semantic as semantic
-from src.report import build_recommendations, expert_conclusion, management_conclusion, review_key, review_priority
+from src.report import build_recommendations, expert_conclusion, format_clause_ids, group_recommendations, management_conclusion, review_key, review_priority
 from src.decision_workflow import apply_employee_decision, decision_record, revalidate_records, russian_impact, russian_recommendation
 from src.ui_state import get_analysis_state, save_analysis_state, save_human_decision
 from app import diff_html, source_label, restore_uploaded_name
@@ -250,6 +250,65 @@ def test_management_conclusion_is_preliminary_and_russian():
     assert "ПРЕДВАРИТЕЛЬНОЕ" in text
     assert "Окончательное заключение формируется" in text
     assert "рисков нет" not in text.lower()
+
+
+def test_repeated_recommendations_are_grouped_with_contiguous_clauses():
+    before = make_doc("before.pdf", {f"3.{number}": f"old responsibility {number}" for number in range(4, 10)})
+    after = make_doc("after.pdf", {f"3.{number}": f"new responsibility {number}" for number in range(4, 10)})
+    rows = compare_documents(before, after)
+    for row in rows:
+        row.requires_human_review = True
+    recommendations = build_recommendations(rows)
+    grouped = group_recommendations(recommendations, rows)
+    assert len(recommendations) == 6
+    assert len(grouped) == 1
+    assert grouped[0]["affected_clauses"] == "3.4–3.9"
+    assert grouped[0]["action"] == "Проверить корректность закрепления ответственности между подразделениями."
+    assert grouped[0]["status"] == "Ожидает экспертной проверки"
+
+
+def test_non_contiguous_clause_ids_are_not_merged_into_false_range():
+    before = make_doc("before.pdf", {"3.4": "old 3.4", "3.7": "old 3.7", "5.2": "old 5.2"})
+    after = make_doc("after.pdf", {"3.4": "new 3.4", "3.7": "new 3.7", "5.2": "new 5.2"})
+    rows = compare_documents(before, after)
+    recommendations = [{
+        "action": "Проверить корректность закрепления ответственности за подразделением.",
+        "source": row.before.fragment_id,
+    } for row in rows]
+    grouped = group_recommendations(recommendations, rows)
+    assert grouped[0]["affected_clauses"] == "3.4, 3.7, 5.2"
+    assert "3.4–3.7" not in grouped[0]["affected_clauses"]
+
+
+def test_management_conclusion_hides_raw_ai_explanation_and_unfinished_review_status():
+    before = make_doc("before.pdf", {"3.4": "old responsibility"})
+    after = make_doc("after.pdf", {"3.4": "new responsibility"})
+    row = compare_documents(before, after)[0]
+    row.requires_human_review = True
+    row.explanation = "The after fragment changes the responsibility and requires review."
+    text = management_conclusion([row], [], build_recommendations([row]), {})
+    assert "The after fragment" not in text
+    assert "Заключение после экспертной проверки" not in text
+    assert "Экспертная проверка ещё не начата." in text
+
+
+def test_management_conclusion_final_state_uses_structured_human_decision():
+    before = make_doc("before.pdf", {"3.4": "old responsibility"})
+    after = make_doc("after.pdf", {"3.4": "new responsibility"})
+    row = compare_documents(before, after)[0]
+    row.requires_human_review = True
+    row.explanation = "The raw English explanation must never be rendered."
+    decisions = {review_key(row): {"employee_decision": "Принять рекомендацию AI"}}
+    text = management_conclusion([row], [], build_recommendations([row]), decisions)
+    assert "ЗАКЛЮЧЕНИЕ С УЧЁТОМ ЭКСПЕРТНОЙ ПРОВЕРКИ" in text
+    assert "The raw English explanation" not in text
+    assert "Принято рекомендаций: 1" in text
+    assert "Подтверждённые выводы по пунктам: 3.4." in text
+
+
+def test_format_clause_ids_only_ranges_contiguous_siblings():
+    assert format_clause_ids(["3.4", "3.5", "3.6"]) == "3.4–3.6"
+    assert format_clause_ids(["3.4", "3.7", "5.2"]) == "3.4, 3.7, 5.2"
 
 
 def test_docx_parser_traceability(tmp_path):

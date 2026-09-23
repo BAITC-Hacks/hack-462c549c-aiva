@@ -11,7 +11,7 @@ from src.analyzer import compare_documents, structural_changes
 from src.decision_workflow import apply_employee_decision, decision_record, revalidate_records, russian_impact, russian_recommendation
 from src.document_parser import parse_document
 from src.models import FunctionRecord
-from src.report import build_recommendations, conclusion, expert_conclusion, management_conclusion, review_key
+from src.report import build_recommendations, conclusion, management_conclusion, review_key
 from src.semantic import ai_status, check_ai_connection, duplicate_flags, enhance_rows, model_name
 from src.ui_state import save_analysis_state, save_human_decision
 
@@ -152,10 +152,7 @@ def render_analysis(state):
                     base=st.session_state.decision_records.get(key) or decision_record(review,russian_recommendation(review)); st.session_state.decision_records[key]=apply_employee_decision(base,decision,comment); st.session_state.expert_reviews[key]={"ai_result":review.model_dump(),"decision":decision,"comment":comment}; save_human_decision(st.session_state,key,decision,comment,russian_recommendation(review)); st.success("Решение сохранено"); st.rerun()
     with tabs[4]: st.dataframe(table, use_container_width=True, height=600)
     with tabs[5]:
-        st.markdown(management_conclusion(rows, structure, recommendations, st.session_state.human_decisions)); st.subheader("Рекомендации AI-агента")
-        for r in recommendations[:25]: st.write(f"{r['action']} — ожидает экспертной проверки ({r['source']})")
-        st.subheader("Заключение после экспертной проверки")
-        for item in expert_conclusion(rows + duplicates, st.session_state.expert_reviews)[:25]: st.write(f"{item['status']} — {item['text']} ({item['source']})")
+        st.markdown(management_conclusion(rows + duplicates, structure, recommendations, st.session_state.human_decisions))
 
 
 u1,u2=st.columns(2)
