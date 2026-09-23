@@ -6,8 +6,9 @@ from src.parser import parse_pdf
 from src.document_parser import parse_document, parse_docx, parse_xlsx
 from src.semantic import enhance_rows, validate_result
 import src.semantic as semantic
-from src.report import build_recommendations, expert_conclusion, review_key, review_priority
+from src.report import build_recommendations, expert_conclusion, management_conclusion, review_key, review_priority
 from src.decision_workflow import apply_employee_decision, decision_record, revalidate_records, russian_impact, russian_recommendation
+from src.ui_state import get_analysis_state, save_analysis_state, save_human_decision
 from app import diff_html, source_label, restore_uploaded_name
 
 
@@ -214,6 +215,41 @@ def test_deferred_decision_is_residual_and_recommendation_is_russian():
     assert result["needs_review"] == 1
     assert "Проверить" in russian_recommendation(type("Row", (), {"semantic_status": "потенциально перераспределена", "status": ""})())
     assert "требует проверки" in russian_impact(type("Row", (), {"semantic_status": "потенциально перераспределена", "requires_human_review": True})())
+
+
+def test_analysis_state_and_human_decision_survive_reconstruction():
+    class State(dict):
+        __getattr__ = dict.get
+        __setattr__ = dict.__setitem__
+    state = State()
+    before = make_doc("before.pdf", {"1.1": "same"})
+    after = make_doc("after.pdf", {"1.1": "same"})
+    save_analysis_state(state, before=before, after=after, rows=[], structure=[], duplicates=[], table=None, recommendations=[], text="result")
+    save_human_decision(state, "p1-c1", "Принять рекомендацию AI", "ok", "Сохранить функцию")
+    rebuilt = get_analysis_state(state)
+    assert state["analysis_completed"] is True
+    assert rebuilt["before"].document_name == "before.pdf"
+    assert state["human_decisions"]["p1-c1"]["employee_decision"] == "Принять рекомендацию AI"
+    save_human_decision(state, "p1-c2", "Отклонить рекомендацию", "no")
+    assert state["human_decisions"]["p1-c1"]["employee_decision"] != state["human_decisions"]["p1-c2"]["employee_decision"]
+
+
+def test_source_label_accepts_function_record_without_attribute_error():
+    from app import source_label
+    parsed = make_doc("original.pdf", {"1.1": "same"})
+    row = compare_documents(parsed, parsed)[0]
+    assert "original.pdf" in source_label(row.before, {f.fragment_id: f for f in parsed.fragments})
+
+
+def test_management_conclusion_is_preliminary_and_russian():
+    parsed = make_doc("before.pdf", {"1.1": "same"})
+    row = compare_documents(parsed, parsed)[0]
+    row.semantic_status = "потенциально потеряна"
+    row.requires_human_review = True
+    text = management_conclusion([row], [], [], {})
+    assert "ПРЕДВАРИТЕЛЬНОЕ" in text
+    assert "Окончательное заключение формируется" in text
+    assert "рисков нет" not in text.lower()
 
 
 def test_docx_parser_traceability(tmp_path):

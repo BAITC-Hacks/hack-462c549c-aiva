@@ -113,3 +113,28 @@ def conclusion(before: ParsedDocument, after: ParsedDocument, rows: list[Compari
     if not ai_available:
         lines.append("Semantic AI недоступен: использован deterministic fallback без внешнего API.")
     return "\n".join(lines)
+
+
+def management_conclusion(rows, structure, recommendations, human_decisions):
+    required = [r for r in rows if r.requires_human_review or r.result_type == "RISK_FLAG"]
+    checked = sum(review_key(r) in human_decisions and human_decisions[review_key(r)].get("decision") not in {None, "Не принято"} for r in required)
+    accepted = sum(human_decisions.get(review_key(r), {}).get("decision") == "Принять рекомендацию AI" for r in required)
+    rejected = sum(human_decisions.get(review_key(r), {}).get("decision") == "Отклонить рекомендацию AI" for r in required)
+    deferred = sum(human_decisions.get(review_key(r), {}).get("decision") in {"Требуется уточнение", "Отложить на дополнительную проверку"} for r in required)
+    preliminary = checked < len(required)
+    lines = ["ПРЕДВАРИТЕЛЬНОЕ" if preliminary else "ЗАКЛЮЧЕНИЕ С УЧЁТОМ ЭКСПЕРТНОЙ ПРОВЕРКИ", "", "1. Результат анализа", "Система сопоставила структурные пункты и функциональные формулировки двух редакций документов.", "", "2. Ключевые структурные изменения"]
+    lines.extend(f"- {item['status']}: {item['name']}" for item in structure[:8])
+    lines += ["", "3. Ключевые функциональные изменения"]
+    counts = {}
+    for row in rows:
+        if row.semantic_status: counts[row.semantic_status] = counts.get(row.semantic_status, 0) + 1
+    for key in ("смысл сохранен", "функция уточнена", "функция расширена", "функция сокращена", "функция существенно изменена", "потенциально перераспределена", "потенциально потеряна"):
+        if counts.get(key): lines.append(f"- {key}: {counts[key]}")
+    lines += ["", "4. Вопросы, требующие экспертного решения", f"Направлено на проверку: {len(required)}; проверено: {checked}; принято: {accepted}; отклонено: {rejected}; требует уточнения: {deferred}; ожидает решения: {len(required)-checked}", "", "5. Потенциальные риски"]
+    risk_count = sum(r.result_type == "RISK_FLAG" for r in rows)
+    lines.append(f"Выявлено {risk_count} потенциальных risk flag; они требуют экспертного подтверждения." if risk_count else f"Автоматически подтверждённых случаев потенциальной потери, дублирования или конфликта функций не выявлено. При этом {len(required)} результатов требуют экспертной проверки.")
+    lines += ["", "6. Рекомендации"]
+    lines.extend(f"- {rec['action']}" for rec in recommendations[:6])
+    if not recommendations: lines.append("Дополнительных действий по результатам автоматического анализа не сформировано.")
+    lines += ["", "7. Статус экспертной проверки", "Окончательное заключение формируется после завершения экспертной проверки." if preliminary else "Экспертная проверка завершена для направленных результатов."]
+    return "\n".join(lines)
